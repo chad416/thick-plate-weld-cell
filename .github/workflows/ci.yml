@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        run: ruff check weldcell tools tests
+
+      - name: Traceability is current (SPEC 5)
+        run: python tools/traceability.py --check
+
+      - name: Unit and integration tests (IT01-IT05, ST logic runs through the translator)
+        run: python -m pytest -v
+
+      - name: Demo runs (plan comparison, clean part, part with cell faults, SCL export)
+        run: |
+          python -m weldcell compare
+          python -m weldcell run --serial BOX-0101 --out out
+          python -m weldcell run --serial BOX-0102 --fault arcfail:12 --fault curtain:30 --fault wfs:80:1.2 --out out || true
+          python -m weldcell scl --out out/FB_WeldCell.scl
+          test -f out/BOX-0101.pdf && test -f out/BOX-0102.pdf && cmp out/FB_WeldCell.scl plc/FB_WeldCell.scl
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weld-records
+          path: out/

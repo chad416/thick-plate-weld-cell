@@ -1,0 +1,77 @@
+{
+ "plans": {
+  "naive": {
+   "policy": "naive",
+   "passes": 88,
+   "cycle_h": 12.26,
+   "arc_on_share": 0.57,
+   "wait_h": 4.32,
+   "preheat_h": 0.46,
+   "positioner_moves": 8,
+   "max_imbalance": 2.64,
+   "max_start_temp_c": 192.9,
+   "min_start_temp_c": 109.9
+  },
+  "balanced": {
+   "policy": "balanced",
+   "passes": 88,
+   "cycle_h": 8.27,
+   "arc_on_share": 0.846,
+   "wait_h": 0.0,
+   "preheat_h": 0.27,
+   "positioner_moves": 88,
+   "max_imbalance": 0.096,
+   "max_start_temp_c": 142.3,
+   "min_start_temp_c": 106.9
+  }
+ },
+ "clean_run": {
+  "cycle_h": 8.32,
+  "counts": {
+   "OK": 88,
+   "NOK_PARAM": 0,
+   "INTERRUPTED": 0
+  },
+  "violations": 0
+ },
+ "fault_run": {
+  "cycle_h": 8.34,
+  "counts": {
+   "OK": 78,
+   "NOK_PARAM": 9,
+   "INTERRUPTED": 1
+  },
+  "events": [
+   {
+    "t": 5013.0,
+    "event": "FAULT",
+    "code": 5,
+    "name": "ARC",
+    "pass": 12
+   },
+   {
+    "t": 5043.0,
+    "event": "OPERATOR_RESET",
+    "cleared": "arcfail",
+    "pass": 12
+   },
+   {
+    "t": 10884.5,
+    "event": "SAFETY_STOP",
+    "pass": 30
+   },
+   {
+    "t": 10914.5,
+    "event": "OPERATOR_RESET",
+    "cleared": "safety",
+    "pass": 30
+   },
+   {
+    "t": 27216.5,
+    "event": "QUALITY_ALARM",
+    "pass": 80
+   }
+  ],
+  "violations": 0
+ }
+}

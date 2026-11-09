@@ -1,0 +1,17 @@
+# Small test coupon: one 12 mm V butt and one fillet, for fast tests.
+part: COUPON-12
+material: {name: "structural steel (generic)", density_kg_m3: 7850, c_j_kgk: 470}
+thermal:
+  ambient_c: 20.0
+  start_c: 105.0
+  zone_width_mm: 100
+  local_fraction: 0.6
+  tau_local_s: 200
+  tau_bulk_s: 3600
+  heater_kw: 20
+plates:
+  - {id: A, t_mm: 12, length_mm: 400, width_mm: 200}
+  - {id: B, t_mm: 12, length_mm: 400, width_mm: 200}
+seams:
+  - {id: C1, joint: V, t_mm: 12, angle_deg: 60, gap_mm: 2, face_mm: 2, length_mm: 400, side: [1, 0],  orient: [0, 0]}
+  - {id: C2, joint: FILLET, t_mm: 12, leg_mm: 6, length_mm: 400, side: [-1, 0], orient: [45, 180]}

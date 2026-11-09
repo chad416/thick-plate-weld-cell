@@ -1,0 +1,16 @@
+# Welding procedure window, MAG (process 135), solid wire.
+# All numbers are placeholders for a simulated product, not a qualified WPS.
+wps: WPS-SIM-135-01
+process: "135 MAG"
+k: 0.8                     # thermal efficiency factor in Q = k*U*I/v
+wire_d_mm: 1.2
+dep_eff: 0.95              # deposition efficiency
+reinforcement: 1.10        # extra area for weld reinforcement
+bead_width_mm: 10.0
+heat_input_kj_mm: [0.70, 1.60]
+preheat_min_c: 100.0
+interpass_max_c: 200.0
+pass_types:
+  root: {current_a: 190, voltage_v: 22.0, wfs_m_min: 6.0,  travel_mm_min: 220, current_band_a: [170, 210]}
+  fill: {current_a: 280, voltage_v: 29.0, wfs_m_min: 10.0, travel_mm_min: 380, current_band_a: [255, 305]}
+  cap:  {current_a: 250, voltage_v: 27.0, wfs_m_min: 8.5,  travel_mm_min: 400, current_band_a: [225, 275]}

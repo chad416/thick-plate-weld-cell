@@ -1,0 +1,350 @@
+FUNCTION_BLOCK "FB_WeldCell"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT
+      Start : Bool;
+      Reset : Bool;
+      SafetyOK : Bool;
+      Clamped : Bool;
+      RobotHome : Bool;
+      RobotBusy : Bool;
+      RobotDone : Bool;
+      ArcFault : Bool;
+      PosInPosition : Bool;
+      FumeOK : Bool;
+      GasOK : Bool;
+      WireOK : Bool;
+      WeldCurrent : Real;
+      PassCount : Int;
+      PreheatMin : Real;
+      InterpassMax : Real;
+   END_VAR
+   VAR_OUTPUT
+      State : Int;
+      FaultCode : Int;
+      PassIdx : Int;
+      ClampCmd : Bool;
+      PosStart : Bool;
+      PosTiltSet : Real;
+      PosRotSet : Real;
+      RobotJob : Int;
+      RobotStart : Bool;
+      RobotHold : Bool;
+      ArcEnable : Bool;
+      FumeCmd : Bool;
+      GasCmd : Bool;
+      HeaterOn : Bool;
+      PassDone : Bool;
+      PassRetries : Int;
+      PassInterrupted : Bool;
+      PassNok : Bool;
+      QualityAlarm : Bool;
+      Waiting : Bool;
+      Done : Bool;
+   END_VAR
+   VAR_IN_OUT
+      aSeam : Array[1..200] of Int;
+      aJob : Array[1..200] of Int;
+      aTilt : Array[1..200] of Real;
+      aRot : Array[1..200] of Real;
+      aIlo : Array[1..200] of Real;
+      aIhi : Array[1..200] of Real;
+      aSeamTemp : Array[1..16] of Real;
+   END_VAR
+   VAR
+      LastState : Int;
+      ResumeState : Int;
+      tStep : TON_TIME;
+      tOut : TON_TIME;
+      rStart : R_TRIG;
+      rReset : R_TRIG;
+      SafetyStop : Bool;
+      Seam : Int;
+      Retry : Int;
+      SinceClean : Int;
+      TempAtStart : Real;
+      CurTilt : Real;
+      CurRot : Real;
+      T : Real;
+   END_VAR
+   VAR CONSTANT
+      S_IDLE : Int := 0;
+      S_CLAMP : Int := 10;
+      S_NEXT : Int := 20;
+      S_POSITION : Int := 30;
+      S_POS_WAIT : Int := 31;
+      S_TEMP : Int := 40;
+      S_PREARC : Int := 50;
+      S_WELD_START : Int := 60;
+      S_WELD : Int := 61;
+      S_POST : Int := 70;
+      S_ADVANCE : Int := 75;
+      S_CLEAN_START : Int := 80;
+      S_CLEAN : Int := 81;
+      S_FINISH : Int := 90;
+      S_UNCLAMP : Int := 95;
+      S_FAULT : Int := 100;
+      T_CLAMP : Time := T#10S;
+      T_POS : Time := T#90S;
+      T_PREARC : Time := T#8S;
+      T_BUSY : Time := T#5S;
+      T_ROBOT : Time := T#7200S;
+      T_TEMP_MAX : Time := T#3600S;
+      CLEAN_EVERY : Int := 6;
+      JOB_CLEAN : Int := 900;
+      MIN_RISE : Real := 5.0;
+      HEATER_HYST : Real := 10.0;
+      TEMP_MARGIN : Real := 6.0;
+   END_VAR
+
+BEGIN
+(* ---- edges, step timer, safety stop ---------------------------------------- *)
+#rStart(CLK := #Start);
+#rReset(CLK := #Reset);
+#tStep(IN := (#State = #LastState) AND NOT #SafetyStop, PT := #T_ROBOT);
+#LastState := #State;
+
+IF NOT #SafetyOK THEN
+    IF NOT #SafetyStop AND (#State = #S_WELD OR #State = #S_WELD_START) THEN
+        #PassInterrupted := TRUE;
+    END_IF;
+    #SafetyStop := TRUE;
+END_IF;
+IF #SafetyStop AND #SafetyOK AND #rReset.Q THEN
+    #SafetyStop := FALSE;
+END_IF;
+#RobotHold := #SafetyStop;
+
+(* ---- sequence ---------------------------------------------------------------- *)
+CASE #State OF
+    #S_IDLE:
+        IF #rStart.Q AND #PassCount > 0 AND NOT #SafetyStop AND #FaultCode = 0 THEN
+            #PassIdx := 1;
+            #SinceClean := 0;
+            #Done := FALSE;
+            #QualityAlarm := FALSE;
+            #State := #S_CLAMP;
+        END_IF;
+
+    #S_CLAMP:
+        #ClampCmd := TRUE;
+        IF #Clamped THEN
+            #State := #S_NEXT;
+        ELSIF #tStep.ET >= #T_CLAMP THEN
+            #FaultCode := 1;
+            #ResumeState := #S_CLAMP;
+            #State := #S_FAULT;
+        END_IF;
+
+    #S_NEXT:
+        #PassDone := FALSE;
+        IF #PassIdx > #PassCount THEN
+            #State := #S_FINISH;
+        ELSE
+            #Seam := #aSeam[#PassIdx];
+            #Retry := 0;
+            #PassRetries := 0;
+            #PassInterrupted := FALSE;
+            #PassNok := FALSE;
+            #State := #S_POSITION;
+        END_IF;
+
+    #S_POSITION:
+        #PosTiltSet := #aTilt[#PassIdx];
+        #PosRotSet := #aRot[#PassIdx];
+        IF ABS(#PosTiltSet - #CurTilt) < 0.5 AND ABS(#PosRotSet - #CurRot) < 0.5 THEN
+            #State := #S_TEMP;
+        ELSIF #RobotHome AND NOT #SafetyStop THEN
+            #PosStart := TRUE;
+            #State := #S_POS_WAIT;
+        ELSIF #tStep.ET >= #T_POS THEN
+            #FaultCode := 2;
+            #ResumeState := #S_POSITION;
+            #State := #S_FAULT;
+        END_IF;
+
+    #S_POS_WAIT:
+        IF NOT #RobotHome OR #SafetyStop THEN
+            #PosStart := FALSE;                     (* interlock: never move with the robot out *)
+            #State := #S_POSITION;
+        ELSIF #PosInPosition AND #tStep.ET >= #T#1S THEN
+            #PosStart := FALSE;
+            #CurTilt := #PosTiltSet;
+            #CurRot := #PosRotSet;
+            #State := #S_TEMP;
+        ELSIF #tStep.ET >= #T_POS THEN
+            #PosStart := FALSE;
+            #FaultCode := 2;
+            #ResumeState := #S_POSITION;
+            #State := #S_FAULT;
+        END_IF;
+
+    #S_TEMP:
+        #T := #aSeamTemp[#Seam];
+        IF #tStep.ET >= #T_TEMP_MAX THEN
+            #HeaterOn := FALSE;                     (* no cooling / heating within the expected time: sensor or heater *)
+            #Waiting := FALSE;
+            #FaultCode := 6;
+            #ResumeState := #S_TEMP;
+            #State := #S_FAULT;
+        ELSIF #T > #InterpassMax - #TEMP_MARGIN THEN
+            #Waiting := TRUE;
+            #HeaterOn := FALSE;
+        ELSIF #HeaterOn THEN
+            IF #T >= #PreheatMin + #HEATER_HYST THEN
+                #HeaterOn := FALSE;
+            END_IF;
+        ELSIF #T < #PreheatMin + #TEMP_MARGIN THEN
+            #HeaterOn := TRUE;
+            #Waiting := FALSE;
+        ELSE
+            #Waiting := FALSE;
+            #TempAtStart := #T;
+            #State := #S_PREARC;
+        END_IF;
+
+    #S_PREARC:
+        #FumeCmd := TRUE;
+        #GasCmd := TRUE;
+        IF #FumeOK AND #GasOK AND #WireOK AND NOT #SafetyStop THEN
+            #State := #S_WELD_START;
+        ELSIF #tStep.ET >= #T_PREARC THEN
+            IF NOT #FumeOK THEN
+                #FaultCode := 4;
+            ELSIF NOT #GasOK THEN
+                #FaultCode := 3;
+            ELSE
+                #FaultCode := 8;
+            END_IF;
+            #ResumeState := #S_PREARC;
+            #State := #S_FAULT;
+        END_IF;
+
+    #S_WELD_START:
+        #RobotJob := #aJob[#PassIdx];
+        IF #PosInPosition AND NOT #SafetyStop AND NOT #RobotBusy THEN
+            #RobotStart := TRUE;
+        END_IF;
+        IF #RobotBusy THEN
+            #RobotStart := FALSE;
+            #State := #S_WELD;
+        ELSIF #tStep.ET >= #T_BUSY THEN
+            #RobotStart := FALSE;
+            #FaultCode := 7;
+            #ResumeState := #S_WELD_START;
+            #State := #S_FAULT;
+        END_IF;
+
+    #S_WELD:
+        #tOut(IN := #WeldCurrent > 20.0 AND (#WeldCurrent < #aIlo[#PassIdx] OR #WeldCurrent > #aIhi[#PassIdx]), PT := #T#2S);
+        IF #tOut.Q THEN
+            #PassNok := TRUE;
+            #QualityAlarm := TRUE;
+        END_IF;
+        IF #ArcFault THEN
+            #Retry := #Retry + 1;
+            #PassRetries := #Retry;
+            IF #Retry <= 1 THEN
+                #State := #S_PREARC;                 (* one automatic retry *)
+            ELSE
+                #FaultCode := 5;
+                #ResumeState := #S_PREARC;
+                #State := #S_FAULT;
+            END_IF;
+        ELSIF #RobotDone AND NOT #RobotBusy THEN
+            #State := #S_POST;
+        ELSIF #tStep.ET >= #T_ROBOT THEN
+            #FaultCode := 7;
+            #ResumeState := #S_WELD_START;
+            #State := #S_FAULT;
+        END_IF;
+
+    #S_POST:
+        #PassDone := TRUE;
+        #tOut(IN := FALSE, PT := #T#2S);
+        IF #aSeamTemp[#Seam] - #TempAtStart < #MIN_RISE THEN
+            #FaultCode := 6;                        (* no temperature rise after a pass: sensor implausible *)
+            #ResumeState := #S_ADVANCE;
+            #State := #S_FAULT;
+        ELSE
+            #State := #S_ADVANCE;
+        END_IF;
+
+    #S_ADVANCE:
+        #PassDone := FALSE;
+        #GasCmd := FALSE;
+        #PassIdx := #PassIdx + 1;
+        #SinceClean := #SinceClean + 1;
+        IF #SinceClean >= #CLEAN_EVERY AND #PassIdx <= #PassCount THEN
+            #State := #S_CLEAN_START;
+        ELSE
+            #State := #S_NEXT;
+        END_IF;
+
+    #S_CLEAN_START:
+        #RobotJob := #JOB_CLEAN;
+        IF NOT #SafetyStop AND NOT #RobotBusy THEN
+            #RobotStart := TRUE;
+        END_IF;
+        IF #RobotBusy THEN
+            #RobotStart := FALSE;
+            #State := #S_CLEAN;
+        ELSIF #tStep.ET >= #T_BUSY THEN
+            #RobotStart := FALSE;
+            #FaultCode := 7;
+            #ResumeState := #S_CLEAN_START;
+            #State := #S_FAULT;
+        END_IF;
+
+    #S_CLEAN:
+        IF #RobotDone AND NOT #RobotBusy THEN
+            #SinceClean := 0;
+            #State := #S_NEXT;
+        END_IF;
+
+    #S_FINISH:
+        #FumeCmd := FALSE;
+        #GasCmd := FALSE;
+        #HeaterOn := FALSE;
+        #PosTiltSet := 0.0;
+        #PosRotSet := 0.0;
+        IF ABS(#CurTilt) < 0.5 AND ABS(#CurRot) < 0.5 THEN
+            #State := #S_UNCLAMP;
+        ELSIF #RobotHome AND NOT #SafetyStop THEN
+            #PosStart := TRUE;
+            IF #PosInPosition AND #tStep.ET >= #T#1S THEN
+                #PosStart := FALSE;
+                #CurTilt := 0.0;
+                #CurRot := 0.0;
+                #State := #S_UNCLAMP;
+            END_IF;
+        ELSE
+            #PosStart := FALSE;
+        END_IF;
+
+    #S_UNCLAMP:
+        #ClampCmd := FALSE;
+        IF NOT #Clamped THEN
+            #Done := TRUE;
+            #State := #S_IDLE;
+        END_IF;
+
+    #S_FAULT:
+        #RobotStart := FALSE;
+        #PosStart := FALSE;
+        #GasCmd := FALSE;
+        #HeaterOn := FALSE;
+        IF #rReset.Q AND #SafetyOK THEN
+            #FaultCode := 0;
+            #Retry := 0;
+            #State := #ResumeState;
+        END_IF;
+END_CASE;
+
+(* ---- permissives, evaluated every scan whatever the step --------------------- *)
+#ArcEnable := (#State = #S_WELD_START OR #State = #S_WELD) AND NOT #SafetyStop AND #FumeOK AND #GasOK AND #WireOK
+             AND #FaultCode = 0;
+IF NOT #RobotHome THEN
+    #PosStart := FALSE;
+END_IF;
+END_FUNCTION_BLOCK
